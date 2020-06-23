@@ -1,0 +1,209 @@
+from mininet.topo import Topo
+from mininet.log import setLogLevel, info, error
+from mininet.net import Mininet, Containernet
+from mininet.node import OVSSwitch, OVSKernelSwitch, Controller, RemoteController, CPULimitedHost, Docker
+from mininet.cli import CLI
+from mininet.link import TCLink, Link
+import re
+import sys
+from mininet.link import Intf
+from mininet.util import quietRun
+from functools import partial
+from mininet.link import Intf
+from mininet.net import Mininet
+from mininet.node import Node
+from mininet.link import Link
+
+
+class FatTreeTopo(Topo):
+    def __init__(self, k=4, r=1):
+        core = []  # core
+        aggregation = []  # aggravate
+        edge = []  # edge
+        all_switch = []  # switch
+        all_hosts = []  # hosts
+
+        # Initialize topology
+        Topo.__init__(self)
+
+        # Create core nodes
+        Core_SW = ((k // 2) ** 2) // r
+        for i in xrange(Core_SW):
+            sw = self.addSwitch('c{}'.format(i + 1),cls=OVSSwitch,protocols='OpenFlow13')
+            core.append(sw)
+            # self.addIntf(sw, 'tap1')
+            all_switch.append(sw)
+
+        # Create aggregation and edge nodes and connect them
+        for pod in xrange(k):
+            aggr_start_node = len(all_switch) + 1
+            aggr_end_node = aggr_start_node + k // 2
+            edge_start_node = aggr_end_node
+            edge_end_node = edge_start_node + k // 2
+            aggr_nodes = xrange(aggr_start_node, aggr_end_node)
+            edge_nodes = xrange(edge_start_node, edge_end_node)
+            for i in aggr_nodes:
+                sw = self.addSwitch('a{}'.format(i),cls=OVSSwitch,protocols='OpenFlow13')
+                aggregation.append(sw)
+                all_switch.append(sw)
+            for j in edge_nodes:
+                sw = self.addSwitch('e{}'.format(j),cls=OVSSwitch,protocols='OpenFlow13')
+                edge.append(sw)
+                all_switch.append(sw)
+            for aa in aggr_nodes:
+                for ee in edge_nodes:
+                    self.addLink( all_switch[aa - 1],  all_switch[ee - 1],bw=100,use_htb=True)
+
+        # Connect core switches to aggregation switches
+        for core_node in xrange(Core_SW):
+            for pod in xrange(k):
+                aggr_node = Core_SW + (core_node // ((k // 2) // r)) + (k * pod)
+                # self.addLink(all_switch[core_node], all_switch[aggr_node], bw = 100, use_htb=True)
+                if core_node == 3:
+                    l = self.addLink(all_switch[core_node], all_switch[aggr_node], bw=100, use_htb=True, cls=TCLink)
+                elif core_node == 2:
+                    l = self.addLink( all_switch[core_node],  all_switch[aggr_node],bw=100, delay='1ms', use_htb=True, cls=TCLink)
+                else:
+                    l = self.addLink( all_switch[core_node],  all_switch[aggr_node],bw=100, delay='2ms', use_htb=True, cls=TCLink)
+
+
+                # switch = Node('c1')
+                # switch.setIP('10.0.0.101')
+
+                # delay = '2ms', delay ='2us', jitter = '1ms', loss=5
+
+        # Create hosts and connect them to edge switches
+        count = 1
+        host = []
+        for sw in edge:
+            for i in xrange(k/2-1):
+                host = self.addHost('h{}'.format(count))
+                #self.addLink(host, switch,bw=10, delay='5ms', loss=10, use_htb=True)
+                self.addLink(sw, host,bw=100)
+                count +=1
+        # count =101
+        # for sw in core:
+        #     host = self.addHost('h{}'.format(count))
+        #     # self.addLink(host, switch,bw=10, delay='5ms', loss=10, use_htb=True)
+        #     self.addLink(sw, host, bw=100)
+        #     count += 1
+
+def checkIntf( intf ):
+    "Make sure intf exists and is not configured."
+    config = quietRun( 'ifconfig %s 2>/dev/null' % intf, shell=True )
+    if not config:
+        error( 'Error:', intf, 'does not exist!\n' )
+        exit( 1 )
+    ips = re.findall( r'\d+\.\d+\.\d+\.\d+', config )
+    if ips:
+        error( 'Error:', intf, 'has an IP address,'
+               'and is probably in use!\n' )
+        exit( 1 )
+
+def simpleTest():
+        "Create and test a simple network"
+        # intfName = sys.argv[1] if len(sys.argv) > 1 else 'eth2'
+        # info('*** Connecting to hw intf: %s' % intfName)
+        # info('*** Checking', intfName, '\n')
+        # checkIntf(intfName)
+
+        OVSSwitch13 = partial(OVSSwitch, protocols='OpenFlow13')
+        topo = FatTreeTopo()
+
+        net = Mininet(topo=topo,switch=OVSSwitch13, controller=None, link=TCLink)
+        net.addController( 'controller',controller=RemoteController,ip='127.0.0.1')
+        # net.addNAT().configDefault()
+
+
+
+        switches = []
+        host = []
+        hostx = net.hosts
+
+        # c1.config(ip='10.0.0.101')
+        numITGnodes = len(hostx)
+        count = len(hostx) +1
+        c_count = 101
+        print count
+        k=4
+        switches = net.switches
+        links = net.links
+        # print links
+        for sname in switches:
+           if(re.search('e',sname.name,flags=0)):
+#                   host = net.addHost('h{}'.format(count))
+
+                   # host = net.addHost('h{}'.format(count), cls=Docker, dimage="haitham/hadoop:v1")
+                   host = net.addHost('h{}'.format(count))
+                   net.addLink(sname, host)
+                   host.setIP('10.0.0.%s'%count,8,'h{}-eth0'.format(count))
+                   print host.IP()
+                   count += 1
+           # elif(re.search('c',sname.name,flags=0)):
+           #     # print "core swithces", sname
+           #     # if (re.search('c1',sname.name,flags=0)):
+           #     #     print "if statment exec"
+           #     host = net.addHost('h{}'.format(c_count))
+           #     net.addLink(sname, host)
+           #     host.setIP('10.0.0.%s'%c_count,8,'h{}-eth0'.format(c_count))
+           #     c_count+=1
+
+                   # Intf('enp0s31f6', node=sname)
+                   # switch = Node('c1')
+                   # switch.setIP('10.0.0.101/24', intf=sintf)
+                   # node =  Node(sname)
+                   # node.addIntf('c1','tap1')
+
+           # if (re.search('e7',sname.name,flags=0)):
+           #     info('*** Adding hardware interface', intfName, 'to switch', sname.name, '\n')
+           #     _intf = Intf(intfName, node=sname)
+               # net.addNAT().configDefault()
+
+        net.addNAT().configDefault()
+
+               # switch.addIntf(newIntf)
+
+
+        #
+#        for sw in edge:
+#            for i in xrange(k / 2):
+#
+#
+
+        info('*** Starting network\n')
+        net.start()
+        hosts = net.hosts
+        print hosts
+
+#        net.ping([h[0], h[2])
+
+# # reciever hosts
+#         for i in range(3,9):
+#             rhost = "h"
+#             rhost+=str(i)
+#             rhost = net.get(rhost)
+# 	    print rhost
+#             rhost.sendCmd('./ITGRecv')
+# #            host.append(rhost)
+
+ # log hosts       
+#        host[2].sendCmd('./ITGLog')
+
+        info('*** Running CLI\n')
+        CLI(net)
+
+        info('*** Stopping network')
+        net.stop()
+
+#    info('*** Dynamically add a container at runtime\n')
+#    d4 = net.addDocker('d4', dimage="ubuntu:trusty")
+    # we have to specify a manual ip when we add a link at runtime
+#    net.addLink(d4, s1, params1={"ip": "10.0.0.254/8"})
+    # other options to do this
+    #d4.defaultIntf().ifconfig("10.0.0.254 up")
+    #d4.setIP("10.0.0.254")
+
+if __name__ == '__main__':
+    # Tell mininet to print useful information
+    setLogLevel('info')
+    simpleTest()
